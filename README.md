@@ -3,7 +3,9 @@ What you need
 ESP32-S3 with display and LVGL in ESPHome
 Home Assistant with Music Assistant
 SSH access to HA
-Python with Pillow library (pip3 install Pillow --break-system-packages)
+Python with Pillow library (pip3 install Pillow --break-system-packages)<img width="4032" height="3024" alt="IMG_1886" src="https://github.com/user-attachments/assets/e5597a54-63be-4c3f-a495-735e1c1b5f05" />
+<img width="4032" height="3024" alt="IMG_1888" src="https://github.com/user-attachments/assets/df6f4357-16d5-44ca-8faf-95077dc354da" />
+
 
 How it works
 Music Assistant creates its own media player entity (in my case media_player.voice_mass_3) that has an entity_picture attribute with the direct Spotify CDN image URL — it is publicly accessible without authentication.
