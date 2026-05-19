@@ -30,4 +30,5 @@ the last idle page, I have a file to test, so it's not much use
 with the red button I turn off the amplifier that I connected to the vpe (sendspin), think about whether to leave it, it suits me, it's good to see if it's on.
 then it still wants to fix the "next" icon button and then probably the background around the image
 so I spent almost the whole night on it and the last few hours with a lot of help from AI, so Claude has a big part in making it work + he prepared a summary for me
-And finally, thanks to Pete30, who will definitely know his job there.
+And finally, thanks to Pete30, who will definitely know his job there
+and of course Claude
