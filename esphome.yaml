@@ -1,0 +1,2415 @@
+esphome:
+  name: panel3b
+  friendly_name: "Panel Chodba"
+  area: ${device_area}
+  min_version: 2025.11.0
+  platformio_options:
+    build_unflags: -Werror=all
+    board_build.flash_mode: dio
+    build_flags: 
+      - -DBOARD_HAS_PSRAM
+    board_build.esp-idf.memory_type: qio_opi
+    board_upload.maximum_ram_size: 524288
+    board_build.flash_size: 16MB
+    # No second OTA partition. Must be flashed through serial (hint: ser2net)
+#    board_build.partitions: "../../../hmi-garage/custom_partition_no_ota.csv"
+  on_boot:
+    - priority: 500 # a bit after sensor init
+      then:
+        - number.set:
+            id: id_num_awake_backlight_brightness
+            value: 100
+        - number.set:
+            id: id_num_idle_backlight_brightness
+            value: 0
+    
+ 
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  cpu_frequency : 240MHz
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESPTOOLPY_FLASHSIZE_8MB: "n"
+      CONFIG_FREERTOS_HZ: "1000"
+      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240: y
+      CONFIG_ESPTOOLPY_FLASHMODE_QIO: y
+      CONFIG_ESPTOOLPY_FLASHFREQ_80M: y
+#      CONFIG_ESPTOOLPY_FLASHFREQ_120M: y
+      CONFIG_SPIRAM_MODE_OCT: y
+      CONFIG_IDF_EXPERIMENTAL_FEATURES: y
+      CONFIG_SPIRAM_SPEED_80M: y
+#      CONFIG_SPIRAM_SPEED_120M: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: y
+      #CONFIG_COMPILER_OPTIMIZATION_SIZE: y
+      CONFIG_COMPILER_OPTIMIZATION_PERF: y
+      #CONFIG_COMPILER_OPTIMIZATION_DEBUG: y
+    advanced:
+      loop_task_stack_size: 8704
+# Enable Home Assistant API
+psram: # (Auto-commented)
+   mode: octal
+   speed: 80MHz
+logger:
+  level: INFO
+
+api:
+  
+
+ota:
+  - platform: esphome
+    
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.xx.xx
+    gateway: 192.168.xx.xx
+    subnet: 255.255.255.0
+  ap:
+    ssid: "neco sem dej"
+preferences: 
+i2c:
+  sda: 8
+  scl: 9
+  frequency: 400kHz
+  scan: false
+  id: bus_a
+ch422g:
+  - id: io_ex
+
+
+    
+display:
+  - platform: mipi_rgb
+    model: RPI
+    id: device_display
+    update_interval: never
+    auto_clear_enabled: false
+    color_order: RGB
+    pclk_frequency: 16MHz
+    dimensions:
+      width: 800
+      height: 480
+    reset_pin:
+      ch422g: io_ex
+      number: 3
+    de_pin:
+      number: 5
+    hsync_pin:
+      number: 46
+      ignore_strapping_warning: true
+    vsync_pin:
+      number: 3
+      ignore_strapping_warning: true
+    pclk_pin: 7
+    pclk_inverted: true
+    hsync_back_porch: 8
+    hsync_front_porch: 8
+    hsync_pulse_width: 4
+    vsync_back_porch: 16
+    vsync_front_porch: 16
+    vsync_pulse_width: 4
+    data_pins:
+      red:
+        - 1         #r3.
+        - 2         #r4.
+        - 42        #r5
+        - 41        #r6
+        - 40        #r7
+      blue:
+        - 14        #b3
+        - 38        #b4
+        - 18        #b5
+        - 17        #b6
+        - 10        #b7
+      green:
+        - 39        #g2
+        - 0         #g3.
+        - 45        #g4
+        - 48        #g5
+        - 47        #g6
+        - 21        #g7
+
+
+
+touchscreen:
+  platform: gt911
+  address: 0x5D
+  id: my_touchscreen
+  interrupt_pin: 4
+  reset_pin:
+    ch422g: io_ex
+    number: 1
+ 
+  on_touch:
+   - lambda: |-
+        ESP_LOGI("Touch", "Touch detected at x=%d, y=%d", touch.x, touch.y);
+   
+  on_update:
+    - lambda: |-
+          for (auto touch: touches)  {
+              if (touch.state <= 2) {
+                ESP_LOGI("Touch points:", "id=%d x=%d, y=%d x.raw=%d, y.raw=%d", touch.id, touch.x, touch.y, touch.x_raw, touch.y_raw);
+              }
+          }  
+  on_release:
+    then:
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+
+
+time:
+  - platform: homeassistant
+    id: time_comp
+    on_time_sync:
+      - script.execute: time_update
+    on_time:
+      - minutes: '*'
+        seconds: 0
+        then:
+          - script.execute: time_update
+
+binary_sensor:
+ ## Status used for weather status 
+  - platform: status
+    name: Status sensor
+globals:
+  - id: timer_seconds
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: sendspin_album_art_valid
+    type: bool
+    restore_value: no
+    initial_value: "false"
+script:
+  - id: time_update
+    then:
+      - lvgl.indicator.update:
+          id: minute_hand
+          value: !lambda |-
+            return id(time_comp).now().minute;
+      - lvgl.indicator.update:
+          id: hour_hand
+          value: !lambda |-
+            auto now = id(time_comp).now();
+            return std::fmod(now.hour, 12) * 60 + now.minute;
+      - lvgl.label.update:
+          id: date_label
+          text: !lambda |-
+            static const char * const mon_names[] = {"LED", "ÚNO", "BŘE", "DUB", "KVĚ", "ČER",
+                                                     "ČVC", "SRP", "ZÁŘ", "ŘÍJ", "LIS", "PRO"};
+            static char date_buf[8];
+            auto now = id(time_comp).now();
+            snprintf(date_buf, sizeof(date_buf), "%s %2d", mon_names[now.month-1], now.day_of_month);
+            return date_buf;
+          text_color: 0x00BFFF
+      - lvgl.label.update:
+          id: day_label
+          text: !lambda |-
+            static const char * const day_names[] = {"NE", "PO", "ÚT", "ST", "ČT", "PÁ", "SO"};
+            return day_names[id(time_comp).now().day_of_week - 1];
+          text_color: 0x00BFFF
+
+  - id: update_weather_icon
+    then:
+      - lambda: |-
+          std::string s = id(weather_state).state;
+
+          if (s == "sunny")
+            lv_img_set_src(id(weather_icon), id(img_jasno));
+          else if (s == "partlycloudy")
+            lv_img_set_src(id(weather_icon), id(img_polojasno));
+          else if (s == "cloudy")
+            lv_img_set_src(id(weather_icon), id(img_zatazeno));
+          else if (s == "rainy")
+            lv_img_set_src(id(weather_icon), id(img_dest));
+          else if (s == "pouring")
+            lv_img_set_src(id(weather_icon), id(img_sprsky));
+          else if (s == "snowy")
+            lv_img_set_src(id(weather_icon), id(img_snezeni));
+          else if (s == "snowy-rainy")
+            lv_img_set_src(id(weather_icon), id(img_snih_s_destem));
+          else if (s == "lightning")
+            lv_img_set_src(id(weather_icon), id(img_blesky));
+          else if (s == "lightning-rainy")
+            lv_img_set_src(id(weather_icon), id(img_bourky_s_destem));
+          else if (s == "fog")
+            lv_img_set_src(id(weather_icon), id(img_mlhy));
+          else if (s == "hail")
+            lv_img_set_src(id(weather_icon), id(img_kroupy));
+          else if (s == "windy")
+            lv_img_set_src(id(weather_icon), id(img_vetrno));
+          else if (s == "windy-variant")
+            lv_img_set_src(id(weather_icon), id(img_promenlivy_vitr));
+          else if (s == "clear-night")
+            lv_img_set_src(id(weather_icon), id(img_jasna_noc));
+          else if (s == "exceptional")
+            lv_img_set_src(id(weather_icon), id(img_varovani));
+
+  - id: update_media_text
+    then:
+      - lvgl.label.update:
+          id: media_info_label
+          text: !lambda |-
+            std::string artist = id(media_artist).state;
+            std::string title = id(media_title).state;
+
+            if (artist.length() == 0) return title.c_str();
+            if (title.length() == 0) return artist.c_str();
+
+            static std::string txt;
+            txt = artist + " - " + title;
+            return txt.c_str();
+
+  - id: update_media_icon
+    then:
+      - lambda: |-
+          std::string idd = id(media_content_id).state;
+
+          if (idd.rfind("http", 0) == 0) {
+            // rádio (stream)
+            lv_label_set_text(id(media_icon), "\U000F043B");
+          } else {
+            // lokální soubor (disk)
+            lv_label_set_text(id(media_icon), "\U000F0960");
+          }
+ 
+  - id: album_art_timeout_fallback
+    mode: restart
+    then:
+      - delay: 800ms
+      - if:
+          condition:
+            lambda: 'return !id(sendspin_album_art_valid);'
+          then:
+            - lvgl.image.update:
+                id: album_art_widget
+                src: fallback_playing_image
+
+  
+
+ 
+
+  - id: time_update_1
+    then:
+      - lvgl.label.update:
+          id: clock_label
+          text: !lambda |-
+            return id(time_comp).now().strftime("%H:%M:%S");
+      - lvgl.label.update:
+          id: date_value_label
+          text: !lambda |-
+            static const char * const mon_names[] = {"Led", "Un", "Bre", "Dub", "Kve", "Cvn",
+                                                     "Cvc", "Srp", "Zar", "Rij", "Lis", "Pro"};
+            static char date_buf[8];
+            auto now = id(time_comp).now();
+            snprintf(date_buf, sizeof(date_buf), "%s %2d", mon_names[now.month-1], now.day_of_month);
+            return date_buf;
+
+
+font:
+  - file: "fonts/frutigercz.ttf"
+    id: my_font40
+    size: 40
+    glyphs: ' !"%()+,-.:&/0123456789AÁBCČDĎEÉĚFGHIÍJKLMNOÓPQRŘSŠTŤUÚŮVWXYÝZŽ_abcdefghijklmnopqrstuvwxyzěščřžýáíéťúů°'
+
+  - file: "fonts/frutigercz.ttf"
+    id: my_font20
+    size: 20
+    glyphs: ' !"%()+,-.:&/0123456789AÁBCČDĎEÉĚFGHIÍJKLMNOÓPQRŘSŠTŤUÚŮVWXYÝZŽ_abcdefghijklmnopqrstuvwxyzěščřžýáíéťúů°'
+    extras:
+      - file: "fonts/mdi.ttf"
+        glyphs:
+          - "\U000F029A"  # tlak
+          - "\U000F058E"  # vlhkost
+
+  - file: "fonts/calibricz.ttf"
+    id: font_cz_text
+    size: 22
+    glyphs: ' !"%()+,-.:&/''0123456789AÁBCČDĎEÉĚFGHIÍJKLMNŇOÓPQRŘSŠTŤUÚŮÜVWXYÝZŽ_abcdďefghijklmnňopqrstuvwxyzěščřžýáíéťúů°'
+
+  - file: "fonts/calibricz.ttf"
+    id: font_cz_text25
+    size: 25
+    glyphs: ' !"%()+,-.:&/''0123456789AÁBCČDĎEÉĚFGHIÍJKLMNŇOÓPQRŘSŠTŤUÚŮÜVWXYÝZŽ_abcdďefghijklmnňopqrstuvwxyzěščřžýáíéťúů°'
+
+  - file: "fonts/frutigercz.ttf"
+    id: my_font16
+    size: 16
+    glyphs: ' !"%()+,-.:&/0123456789AÁBCČDĎEÉĚFGHIÍJKLMNOÓPQRŘSŠTŤUÚŮVWXYÝZŽ_abcdefghijklmnopqrstuvwxyzěščřžýáíéťúů°'
+
+  - file: 'fonts/mdi.ttf'
+    id: font_icons
+    size: 30
+    glyphs:
+      - "\U000F0425" # on/off
+      - "\U000F040A" # play
+      - "\U000F075E" # volume -     
+      - "\U000F075D" # volume +
+      - "\U000F04DB" # stop
+      - "\U000F03E4" # pause
+      - "\U000F125B" # roleta nahoru
+      - "\U000F1259" # roleta dolu
+      - "\U000F0666" # roleta stop
+      - "\U000F1A6B" # roleta 50%
+      - "\U000F1A6C" # roleta 70%
+      - "\U000F043B" # radio
+      - "\U000F0803" # artist
+      - "\U000F0960" # media disk
+      - "\U000F1108" # zasuvka
+      - "\U000F035D" # sipka dolu
+      - "\U000F0360" # sipka nahoru
+
+
+  - file: 'fonts/mdi.ttf'
+    id: font_icons_50
+    size: 50
+    glyphs:
+      - "\U000F043B" # radio
+      - "\U000F0960" # media disk
+      - "\U000F1108" # zasuvka
+      - "\U000F09F0" # kvetina
+      - "\U000F0F61" # moon-first-quarter
+      - "\U000F0F62" # moon-full
+      - "\U000F0F63" # moon-last-quarter
+      - "\U000F0F64" # moon-new
+      - "\U000F0F65" # moon-waning-crescent
+      - "\U000F0F66" # moon-waning-gibbous
+      - "\U000F0F67" # moon-waxing-crescent
+      - "\U000F0F68" # moon-waxing-gibbous
+      - "\U000F0D3E" # stozar elektro
+
+  - file: arial.ttf
+    id: font_clock
+    size: 80
+  - file: arial.ttf
+    id: font_medium
+    size: 24
+  - file: arial.ttf
+    id: font_large
+    size: 32
+  - file: arial.ttf
+    id: font_small
+    size: 1
+
+
+ 
+
+
+
+  - file: "gfonts://Roboto"
+    id: font_icons_medium
+    size: 16
+  - file: "gfonts://Roboto"
+    id: font_mdi
+    size: 12
+
+  - file: "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: font_icons_small
+    size: 24
+    glyphs:
+      - "\U000F0030"
+      - "\U000F040A"  # mdi:play
+      - "\U000F03E4"  # mdi:pause
+      - "\U000F049A"  # mdi:skip-previous
+      - "\U000F04AE"  # mdi:skip-next
+      - "\U000F0580"  # mdi:volume-high
+      - "\U000F0583"  # mdi:volume-off
+number:
+  - platform: template
+    name: Screen Backlight Timeout
+    optimistic: true
+    id: id_num_bl_timeout
+    initial_value: 240
+    restore_value: true
+    min_value: 10
+    max_value: 300
+    step: 5
+    mode: box
+    unit_of_measurement: "s"
+    icon: mdi:timer-outline
+    entity_category: config
+
+  - platform: template
+    id: id_num_awake_backlight_brightness
+    name: "Awake Screen Backlight Brightness Level"
+    min_value: 21
+    max_value: 100
+    step: 1
+    optimistic: true
+    unit_of_measurement: "%"
+    icon: mdi:brightness-6
+    entity_category: config
+    on_value:
+      
+    - if:
+        condition:
+          - lvgl.is_paused
+          - light.is_off: id_light_backlight_brightness
+        then:
+          - lvgl.resume
+          - light.turn_on: 
+              id: id_light_backlight_brightness
+              brightness: !lambda return x / 100.0;
+              transition_length: 300ms
+              color_mode: BRIGHTNESS
+
+  - platform: template
+    id: id_num_idle_backlight_brightness
+    name: "Idle Screen Backlight Brightness Level"
+    min_value: 0
+    max_value: 20
+    step: 1
+    optimistic: true
+    unit_of_measurement: "%"
+    icon: mdi:brightness-4
+    entity_category: config
+    on_value:
+      
+      if:
+        condition:
+          - lvgl.is_paused
+          - light.is_off: id_light_backlight_brightness
+        then:
+          - lvgl.resume
+          - light.turn_on: 
+              id: id_light_backlight_brightness
+              brightness: !lambda return x / 100.0;
+              transition_length: 300ms
+              color_mode: BRIGHTNESS
+text_sensor:
+  - platform: homeassistant
+    id: weather_state
+    entity_id: weather.home
+    on_value:
+      then:
+        - script.execute: update_weather_icon
+
+  - platform: homeassistant
+    id: player_state
+    entity_id: media_player.voice_mass_3
+
+    on_value:
+      then:
+        - if:
+            condition:
+              text_sensor.state:
+                id: player_state
+                state: "playing"
+            then:
+              - lvgl.label.update:
+                  id: icon_play
+                  text: "\U000F03E4"   # PAUSE
+            else:
+              - lvgl.label.update:
+                  id: icon_play
+                  text: "\U000F040A"   # PLAY
+
+  - platform: homeassistant
+    id: media_title
+    entity_id: media_player.voice_mass_3
+    attribute: media_title
+    on_value:
+      then:
+        - script.execute: update_media_text
+
+  - platform: homeassistant
+    id: media_artist
+    entity_id: media_player.voice_mass_3
+    attribute: media_artist
+    on_value:
+      then:
+        - script.execute: update_media_text
+
+  - platform: homeassistant
+    id: media_state
+    entity_id: media_player.voice_mass_3
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return x == "playing";'
+            then:
+              - lvgl.widget.show: media_info_label
+            else:
+              - lvgl.widget.hide: media_info_label
+
+  - platform: homeassistant
+    id: media_content_id
+    entity_id: media_player.voice_mass_3
+    attribute: media_content_id
+    on_value:
+      then:
+        - script.execute: update_media_icon
+  - platform: homeassistant
+    id: cas_elecrow_txt
+    entity_id: input_number.cas_elecrow
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: timer_label_inner
+            text: !lambda |-
+              int minuty = atoi(x.c_str());
+              static char buf[10];
+              snprintf(buf, sizeof(buf), "%d", minuty);
+              return buf;
+
+  - platform: homeassistant
+    id: zas_l_state
+    entity_id: switch.zasuvka_mycka
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: zas_l_icon
+            text_color: !lambda |-
+              if (x == "on") return lv_color_hex(0xFF0000);  // červená
+              return lv_color_hex(0x696969);                // šedá
+
+  - platform: homeassistant
+    id: zas_p_state
+    entity_id: switch.zasuvka_pracka
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: zas_p_icon
+            text_color: !lambda |-
+              if (x == "on") return lv_color_hex(0xFF0000);
+              return lv_color_hex(0x696969);
+
+  - platform: homeassistant
+    id: svatek_text
+    entity_id: sensor.dnes_ma_svatek
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: svatek_info_label
+            text: !lambda |-
+              if (x.length() > 0) {
+                static std::string txt;
+                txt = "Dnes má svátek: " + x;
+                return txt.c_str();
+              }
+              return "---";
+
+  - platform: homeassistant
+    id: moon_phase_name
+    entity_id: sensor.moon_faze
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: moon_phase_label
+            text: !lambda |-
+              if (x.length() > 0) {
+                return x.c_str();
+              }
+              return "---";
+
+  - platform: homeassistant
+    id: moon_phase_icon
+    entity_id: sensor.moon_faze
+    attribute: entity_picture
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: moon_icon_label
+            text: !lambda |-
+              if (x.find("first_quarter") != std::string::npos) return "\U000F0F61";
+              if (x.find("full_moon") != std::string::npos) return "\U000F0F62";
+              if (x.find("last_quarter") != std::string::npos) return "\U000F0F63";
+              if (x.find("new_moon") != std::string::npos) return "\U000F0F64";
+              if (x.find("waning_crescent") != std::string::npos) return "\U000F0F65";
+              if (x.find("waning_gibbous") != std::string::npos) return "\U000F0F66";
+              if (x.find("waxing_crescent") != std::string::npos) return "\U000F0F67";
+              if (x.find("waxing_gibbous") != std::string::npos) return "\U000F0F68";
+              return "\U000F0F64";
+  - platform: homeassistant
+    id: text_stav
+    entity_id: lock.zamek_vrata
+    on_value:
+      - lvgl.label.update:
+          id: lock_label
+          text: !lambda |-
+            if (x == "locked") return std::string("Zamčeno");
+            if (x == "unlocked") return std::string("Odemčeno");
+            return std::string("Neznámý stav");
+  - platform: homeassistant
+    id: media_artist_1
+    entity_id: media_player.voice_mass_3
+    attribute: media_artist
+    on_value:
+      - lvgl.label.update:
+          id: artist_label
+          text: !lambda "return x.empty() ? std::string(\"-\") : x;"
+
+  - platform: homeassistant
+    id: media_title_1
+    entity_id: media_player.voice_mass_3
+    attribute: media_title
+    on_value:
+      - lvgl.label.update:
+          id: title_label_1
+          text: !lambda "return x.empty() ? std::string(\"-\") : x;"
+
+  - platform: homeassistant
+    id: media_state_1
+    entity_id: media_player.voice_mass_3
+    on_value:
+      - lvgl.label.update:
+          id: playpause_label
+          text: !lambda |-
+            return std::string(x == "playing" ? "\U000F03E4" : "\U000F040A");
+      - lvgl.widget.update:
+          id: prev_btn
+          opa: !lambda "return (x == \"unavailable\" || x == \"unknown\") ? 80 : 255;"
+      - lvgl.widget.update:
+          id: next_btn
+          opa: !lambda "return (x == \"unavailable\" || x == \"unknown\") ? 80 : 255;"
+      - lvgl.widget.update:
+          id: playpause_btn
+          opa: !lambda "return (x == \"unavailable\" || x == \"unknown\") ? 80 : 255;"
+      - lvgl.widget.update:
+          id: volume_slider
+          clickable: !lambda "return !(x == \"unavailable\" || x == \"unknown\");"
+
+  - platform: homeassistant
+    id: mute_state
+    entity_id: media_player.voice_mass
+    attribute: is_volume_muted
+    on_value:
+      - lvgl.label.update:
+          id: mute_label
+          text: !lambda |-
+            return std::string(x == "True" ? "\U000F0583" : "\U000F0580");
+
+  - platform: homeassistant
+    id: zvuk_obyvak_state
+    entity_id: switch.zvuk_obyvak
+    on_value:
+      - lvgl.widget.update:
+          id: zvuk_switch
+          state:
+            checked: !lambda "return x == \"on\";"
+  - platform: homeassistant
+    id: media_image_url
+    entity_id: media_player.voice_mass_3
+    attribute: entity_picture
+    on_value:
+      then:
+        - globals.set:
+            id: sendspin_album_art_valid
+            value: "false"
+        - script.execute: album_art_timeout_fallback
+        - lambda: |-
+            if (x.empty() || x.rfind("http", 0) != 0) return;
+            id(id_online_img_cover).set_url(x.c_str());
+        - component.update: id_online_img_cover
+sensor:
+  - platform: homeassistant
+    id: album_color_r
+    entity_id: input_text.album_color_r
+
+  - platform: homeassistant
+    id: album_color_g
+    entity_id: input_text.album_color_g
+  - platform: homeassistant
+    id: album_color_b
+    entity_id: input_text.album_color_b
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t r = (uint8_t)id(album_color_r).state;
+            uint8_t g = (uint8_t)id(album_color_g).state;
+            uint8_t b = (uint8_t)id(album_color_b).state;
+
+            uint8_t rd = r / 2;
+            uint8_t gd = g / 2;
+            uint8_t bd = b / 2;
+
+            uint8_t rl = (r + 255) / 2;
+            uint8_t gl = (g + 255) / 2;
+            uint8_t bl = (b + 255) / 2;
+
+            lv_color_t col_main  = lv_color_make(r,  g,  b);
+            lv_color_t col_dark  = lv_color_make(rd, gd, bd);
+            lv_color_t col_light = lv_color_make(rl, gl, bl);
+
+            float luminance       = 0.299f * r  + 0.587f * g  + 0.114f * b;
+            float luminance_dark  = 0.299f * rd + 0.587f * gd + 0.114f * bd;
+            float luminance_light = 0.299f * rl + 0.587f * gl + 0.114f * bl;
+
+            lv_color_t text_on_main  = (luminance       > 128) ? lv_color_make(0,0,0) : lv_color_make(255,255,255);
+            lv_color_t text_on_dark  = (luminance_dark  > 128) ? lv_color_make(0,0,0) : lv_color_make(255,255,255);
+            lv_color_t text_on_light = (luminance_light > 128) ? lv_color_make(0,0,0) : lv_color_make(255,255,255);
+
+            // Pozadí stránky
+            lv_obj_set_style_bg_color(lv_scr_act(), col_dark, LV_PART_MAIN);
+
+            // Kontejner: artist + title [row 0]
+            lv_obj_t *artist_parent = lv_obj_get_parent(id(artist_label));
+            lv_obj_set_style_bg_color(artist_parent, col_dark, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(artist_parent, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(artist_label), text_on_dark, LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(title_label_1), text_on_dark, LV_PART_MAIN);
+
+            // Kontejner: playpause + mute [row 1]
+            lv_obj_t *play_parent = lv_obj_get_parent(id(playpause_btn));
+            lv_obj_set_style_bg_color(play_parent, col_dark, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(play_parent, LV_OPA_COVER, LV_PART_MAIN);
+
+            lv_obj_set_style_bg_color(id(playpause_btn), col_main, LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(playpause_label), text_on_main, LV_PART_MAIN);
+
+            lv_obj_set_style_bg_color(id(mute_btn), col_main, LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(mute_label), text_on_main, LV_PART_MAIN);
+
+            // Kontejner: prev + next [row 2]
+            lv_obj_t *nav_parent = lv_obj_get_parent(id(prev_btn));
+            lv_obj_set_style_bg_color(nav_parent, col_dark, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(nav_parent, LV_OPA_COVER, LV_PART_MAIN);
+
+            lv_obj_set_style_bg_color(id(prev_btn), col_main, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(id(next_btn), col_main, LV_PART_MAIN);
+
+            // Kontejner: volume slider
+            lv_obj_t *vol_parent = lv_obj_get_parent(id(volume_slider));
+            lv_obj_set_style_bg_color(vol_parent, col_dark, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(vol_parent, LV_OPA_COVER, LV_PART_MAIN);
+
+            lv_obj_set_style_bg_color(id(volume_slider), col_light, LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(id(volume_slider), col_light, LV_PART_KNOB);
+
+            // Progress bar
+            lv_obj_set_style_bg_color(id(progress_bar), col_dark, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(id(progress_bar), col_light, LV_PART_INDICATOR);
+
+            // zvuk_switch tlačítko
+            lv_obj_set_style_bg_color(id(zvuk_switch), col_main, LV_PART_MAIN);
+  - platform: homeassistant
+    id: prikon_cez
+    entity_id: sensor.energeticky_total
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: hodnota_prikon_label
+            text: !lambda |-
+              static char buf[16];
+              snprintf(buf, sizeof(buf), "%.0f W", x);
+              return buf;
+
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: sensor.th_prujezd_temperature
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: outdoor_temp_label
+            text: !lambda |-
+              char buf[10];
+              sprintf(buf, "%.1f°C", x);
+              return buf;
+
+  - platform: homeassistant
+    id: pressure
+    entity_id: sensor.br1_pressure_l1
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: pressure_label
+            text: !lambda |-
+              char buf[32];
+              sprintf(buf, "\U000F029A %.0f hPa", x);
+              return buf;
+
+  - platform: homeassistant
+    id: humidity
+    entity_id: sensor.th_prujezd_humidity
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: humidity_label
+            text: !lambda |-
+              char buf[32];
+              sprintf(buf, "\U000F058E %.0f %%", x);
+              return buf;
+
+
+
+  - platform: homeassistant
+    id: volume_sensor
+    entity_id: media_player.voice_mass
+    attribute: volume_level  # 0.0 - 1.0
+  
+
+  - platform: homeassistant
+    id: media_volume
+    entity_id: media_player.voice_mass
+    attribute: volume_level
+    on_value:
+      - lvgl.slider.update:
+          id: volume_slider
+          value: !lambda "return (int)(x * 100);"
+
+  - platform: homeassistant
+    id: media_position
+    entity_id: media_player.voice_mass_3
+    attribute: media_position
+    on_value:
+      - lvgl.bar.update:
+          id: progress_bar
+          value: !lambda |-
+            float dur = id(media_duration).state;
+            if (dur <= 0) return 0;
+            return (int)((x / dur) * 100.0f);
+
+  - platform: homeassistant
+    id: media_duration
+    entity_id: media_player.voice_mass_3
+    attribute: media_duration
+    on_value:
+      - lvgl.bar.update:
+          id: progress_bar
+          value: !lambda |-
+            float pos = id(media_position).state;
+            if (x <= 0) return 0;
+            return (int)((pos / x) * 100.0f);
+
+http_request:
+  verify_ssl: false
+
+online_image:
+  - url: "http://homeassistant.local:8123/local/images/playing.png"
+    id: id_online_img_cover
+    format: JPEG 
+    type: RGB565
+    resize: 320x240
+    update_interval: never
+    on_download_finished:
+      then:
+        - globals.set:
+            id: sendspin_album_art_valid
+            value: "true"
+            
+        - lvgl.image.update:
+            id: album_art_widget
+            src: id_online_img_cover  
+    on_error:
+      then:
+        - globals.set:
+            id: sendspin_album_art_valid
+            value: "false"
+        - lvgl.image.update:
+            id: album_art_widget
+          
+            src: fallback_playing_image
+image:
+  - file: http://homeassistant.local:8123/local/images/playing.png
+    id: fallback_playing_image
+    type: RGB565
+    transparency: alpha_channel
+  - file: "pocasi/jasno.png"
+    id: img_jasno
+    type: RGB565
+
+  - file: "pocasi/dest.png"
+    id: img_dest
+    type: RGB565
+
+  - file: "pocasi/zatazeno.png"
+    id: img_zatazeno
+    type: RGB565
+
+  - file: "pocasi/polojasno.png"
+    id: img_polojasno
+    type: RGB565
+
+  - file: "pocasi/blesky.png"
+    id: img_blesky
+    type: RGB565
+
+  - file: "pocasi/bourky_s_destem.png"
+    id: img_bourky_s_destem
+    type: RGB565
+
+  - file: "pocasi/jasna_noc.png"
+    id: img_jasna_noc
+    type: RGB565
+
+  - file: "pocasi/kroupy.png"
+    id: img_kroupy
+    type: RGB565
+
+  - file: "pocasi/mlhy.png"
+    id: img_mlhy
+    type: RGB565
+
+  - file: "pocasi/promenlivy_vitr.png"
+    id: img_promenlivy_vitr
+    type: RGB565
+      
+  - file: "pocasi/snezeni.png"
+    id: img_snezeni
+    type: RGB565
+
+  - file: "pocasi/snih_s_destem.png"
+    id: img_snih_s_destem
+    type: RGB565
+
+  - file: "pocasi/sprsky.png"
+    id: img_sprsky
+    type: RGB565
+
+  - file: "pocasi/varovani.png"
+    id: img_varovani
+    type: RGB565
+
+  - file: "pocasi/vetrno.png"
+    id: img_vetrno
+    type: RGB565
+  - file: http://homeassistant.local:8123/local/images/subw.png
+    id: subw
+   # resize: 320x240
+    type: RGB565
+    transparency: alpha_channel
+lvgl:
+   style_definitions:
+    - id: label_style
+      text_font: my_font40
+      text_color: 0xFFFFFF
+      align: CENTER
+      bg_opa: TRANSP
+
+    - id: button_label_style
+      text_font: my_font20
+      text_color: 0xFFFFFF
+      align: CENTER
+      bg_opa: TRANSP
+
+    - id: date_style
+      text_font: my_font20
+      text_color: 0xFFFFFF
+      align: CENTER
+      bg_opa: TRANSP
+
+    - id: clock_container_style
+      bg_color: 0x000000      # černé pozadí uvnitř containeru
+      border_color: 0xFFA500  # oranžový rámeček
+      border_width: 1         # tloušťka rámečku
+      radius: 5             # zaoblené rohy rámečku
+      pad_all: 0
+
+    - id: meter_style
+      border_width: 0
+      outline_width: 0
+      align: center
+      bg_color: 0
+    - id: title_style
+      text_font: font_large
+      align: center
+      text_color: 16777215
+      bg_opa: TRANSP
+      bg_color: 0
+      radius: 4
+      pad_all: 2
+    - id: detail_style
+      text_font: font_medium
+      align: center
+      text_color: 16777215
+      bg_opa: TRANSP
+      bg_color: 0
+      radius: 4
+      pad_all: 2
+    - id: base_panel_style
+      bg_color: 0
+      border_width: 0
+      radius: 0
+      pad_all: 0
+    - id: section_panel_style
+      bg_color: 1118481
+      border_width: 1
+      border_color: 4473924
+      radius: 10
+      pad_all: 10
+    - id: title_label_style
+      text_font: font_medium
+      text_color: 15461146
+      align: CENTER
+      bg_opa: TRANSP
+    - id: sensor_value_style
+      text_font: font_large
+      text_color: 16777215
+      align: CENTER
+      bg_opa: TRANSP
+    
+    - id: clock_label_style
+      text_font: font_clock
+      text_color: 15461146
+      align: CENTER
+    - id: button_style
+      bg_color: 16777215
+      radius: 15
+      border_width: 1
+      border_color: 13421772
+      pad_all: 10
+  
+ 
+ 
+   pages:
+    - id: media_page
+      on_swipe_right:
+        - lambda: 'lv_indev_wait_release(lv_indev_get_act());'
+        - lvgl.page.next:
+            animation: OUT_RIGHT
+            time: 300ms
+    #  bg_color: 0x00FA9A
+      widgets:
+        - obj:
+            align: CENTER
+            width: 800
+            height: 480
+            pad_all: 10
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            scrollable: false
+            layout:
+              type: GRID
+              grid_columns: [360, 390]
+              grid_rows: [320, 5,  130, 4]
+            widgets:
+
+              # Cover art vlevo
+              - obj:
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                 # bg_color: 0x3CB371
+                  radius: 6
+                 # pad_all: 5
+                  widgets:
+                    - image:
+                        id: album_art_widget
+                        src: id_online_img_cover
+              - bar:
+                  id: progress_bar
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: CENTER
+                  width: 320
+                  height: 4
+                  min_value: 0
+                  max_value: 100
+               #   bg_color: 0x3CB371
+                  indicator:
+                    bg_color: 0x0be6e2
+             
+              - obj:
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 2
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  bg_opa: TRANSP
+                  border_opa: TRANSP
+                  pad_bottom: 8
+                  layout:
+                    type: FLEX
+                    flex_flow: ROW
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                  widgets:
+                    - button:
+                        id: zvuk_switch
+                        width: 150
+                        height: 95
+                        checkable: true
+                      #  bg_color: 0x3CB371
+                        radius: 6
+                        widgets:
+                          - image:
+                              align: CENTER
+                             # text_font: font_icons_small
+                              src: subw
+                              
+                  on_click:
+                    - homeassistant.action:
+                        action: homeassistant.toggle
+                        data:
+                          entity_id: switch.zvuk_obyvak
+              # Info + ovládání vpravo
+              - obj:
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  bg_opa: TRANSP
+                  border_opa: TRANSP
+                  scrollable: false
+                  layout:
+                    type: GRID
+                    grid_columns: [FR(1)]
+                    grid_rows: [90, 70, 70]
+                                
+                                      
+                  widgets:  # Artist + title
+                    - obj:
+                        grid_cell_column_pos: 0
+                        grid_cell_row_pos: 0
+                        grid_cell_x_align: STRETCH
+                        grid_cell_y_align: STRETCH
+                     #   bg_color: 0x3CB371
+                        height: 100
+                        width: 300
+                        radius: 6
+                        pad_all: 8
+                        
+                        widgets:
+                          - label:
+                              id: artist_label
+                              x: 0
+                              y: 0
+                              text: "-"
+                              text_font: font_medium
+                              text_color: 0x556B2F
+                              long_mode: SCROLL_CIRCULAR
+                              width: 320
+                          - label:
+                              id: title_label_1
+                              x: 0
+                              y: 30
+                              text: "-"
+                              text_font: font_medium
+                              text_color: 0x556B2F
+                              long_mode: SCROLL_CIRCULAR
+                              width: 320
+
+                    # Tlačítka přehrávání
+                    - obj:
+                        grid_cell_column_pos: 0
+                        grid_cell_row_pos: 1
+                        grid_cell_x_align: STRETCH
+                        grid_cell_y_align: CENTER
+                      #  bg_color: 0x3CB371
+                        width: 300
+                        height: 90
+                        radius: 6
+                        pad_all: 8
+                       # layout:
+                     
+                        widgets:
+
+                          - button:
+                              id: playpause_btn
+                              width: 150
+                              height: 55
+                             # bg_color: 0x00FA9A
+                              align: left_mid
+                              radius: 6
+                              widgets:
+                                - label:
+                                    id: playpause_label
+                                    align: CENTER
+                                    text_font: font_icons_small
+                                    text: "\U000F040A"
+                                    text_color: 0x556B2F
+                              on_click:
+                                - homeassistant.action:
+                                    action: media_player.media_play_pause
+                                    data:
+                                      entity_id: media_player.voice_mass
+                          
+
+                          - button:
+                              id: mute_btn
+                              width: 150
+                              height: 55
+                              align: right_mid
+                          #    bg_color: 0x00FA9A
+                              radius: 6
+                              widgets:
+                                - label:
+                                    id: mute_label
+                                    align: CENTER
+                                    text_font: font_icons_small
+                                    text: "\U000F0580"
+                                    text_color: 0x556B2F
+                              on_click:
+                                - homeassistant.action:
+                                    action: media_player.volume_mute
+                                    data:
+                                      entity_id:  media_player.voice_mass
+                                      is_volume_muted: !lambda |-
+                                        return id(mute_state).state == "True";
+
+                    # Progress bar (trvání skladby)
+                    
+
+                    - obj:
+                        grid_cell_column_pos: 0
+                        grid_cell_row_pos: 2
+                        grid_cell_x_align: STRETCH
+                        grid_cell_y_align: STRETCH
+                  #   #   bg_color: 0x3CB371
+                        width: 300
+                        height: 90
+                        radius: 6
+                        pad_all: 8
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_main: SPACE_EVENLY
+                          flex_align_cross: CENTER
+                        widgets:
+                          - button:
+                              id: prev_btn
+                              width: 150
+                              height: 55
+                              align: left_mid
+                          #    bg_color: 0x00FA9A
+                              radius: 6
+                              widgets:
+                                - label:
+                                    align: CENTER
+                                    text_font: font_icons_small
+                                    text: "\U000F04AE"
+                                    text_color: 0x556B2F
+                              on_click:
+                                - homeassistant.action:
+                                    action: media_player.media_previous_track
+                                    data:
+                                      entity_id:  media_player.voice_mass
+                          - button:
+                              id: next_btn
+                              width: 150
+                              height: 55
+                              align: right_mid
+                            #  bg_color: 0x00FA9A
+                              radius: 6
+                              widgets:
+                                - label:
+                                    align: CENTER
+                                    text_font: font_icons_small
+                                    text: "\U000F040E"
+                                    text_color: 0x556B2F
+                              on_click:
+                                - homeassistant.action:
+                                    action: media_player.media_next_track
+                                    data:
+                                      entity_id:  media_player.voice_mass       
+                   
+              - obj:
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 2
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                #  bg_color: 0x3CB371
+                  radius: 6
+                  pad_all: 5
+                  height: 90
+                  widgets:
+                    - label:
+                        text: "\U000F0580"
+                        text_font: font_icons_small
+                        text_color: 0x556B2F
+                    - slider:
+                        id: volume_slider
+                        width: 280
+                        height: 20
+                        align: CENTER
+                        min_value: 0
+                        max_value: 100
+                        indicator:
+                          bg_color: 0x00FA9A
+                        knob:
+                          bg_color: 0x00FA9A
+                          width: 20
+                          height: 20
+                        on_value:
+                          - homeassistant.action:
+                              action: media_player.volume_set
+                              data:
+                                entity_id: media_player.voice_mass
+                                volume_level: !lambda "return x / 100.0;"
+
+
+    - id: my_page
+      on_swipe_right:
+        - lambda: 'lv_indev_wait_release(lv_indev_get_act());'
+        - lvgl.page.next:
+            animation: OUT_RIGHT
+            time: 300ms
+      widgets:
+        - image:  # ikony pocasi
+           id: weather_icon
+           src: img_jasno
+           width: 106
+           height: 106
+           align: TOP_LEFT
+           x: 8
+           y: 8
+
+        - label: # faze moon
+           id: moon_phase_label
+           text: "---"
+           text_font: font_cz_text25
+           text_color: 0x9400D3
+           align: TOP_LEFT
+           x: 370
+           y: 47
+
+        - label:
+           id: outdoor_temp_label
+           text: "--°C"
+           align: TOP_LEFT
+           x: 115
+           y: 45
+           text_font: my_font40
+           text_color: 0x9400D3
+
+        - label: # ikony moon
+            id: moon_icon_label
+            text: "\U000F0F64"
+            text_font: font_icons_50
+            text_color: 0xF4A460
+            align: TOP_LEFT
+            x: 295
+            y: 37
+
+        - label:
+           id: pressure_label
+           text_font: my_font20
+           text_color: 0x32CD32
+           text: "\U000F029A -- hPa"
+           align: TOP_LEFT
+           x: 25
+           y: 112
+
+        - label:
+            id: pressure_trend_icon
+            text: "\U000F035D"   # default šipka dolů
+            text_font: font_icons
+            text_color: 0xFF4500
+            align: TOP_LEFT
+            x: 140 
+            y: 108
+
+        - label:
+           id: humidity_label
+           text_font: my_font20
+           text_color: 0x7B68EE
+           text: "\U000F058E -- %"
+           align: TOP_LEFT
+           x: 25
+           y: 142
+
+        - obj:  # container pro hodiny
+            height: SIZE_CONTENT
+            width: 240
+            align: TOP_RIGHT       # pravý horní roh
+            pad_all: 0
+            border_width: 0        # žádný rámeček
+            bg_color: 0x000000     # černé pozadí
+            widgets:
+              - meter:  # ciferník hodin
+                  height: 220
+                  width: 220
+                  align: CENTER
+                  bg_opa: TRANSP
+                  border_width: 0
+                  text_color: 0xDEB887
+                  scales:
+                    - range_from: 0
+                      range_to: 60
+                      angle_range: 360
+                      rotation: 270
+                      ticks:
+                        width: 1
+                        count: 61
+                        length: 10
+                        color: 0x6A5ACD
+                      indicators:
+                        - line:
+                            id: minute_hand
+                            width: 3
+                            color: 0xD2691E
+                            length: -4
+                            value: 0
+                    - range_from: 1
+                      range_to: 12
+                      angle_range: 330
+                      rotation: 300
+                      ticks:
+                        width: 1
+                        count: 12
+                        length: 1
+                        major:
+                          stride: 1
+                          width: 4
+                          length: 10
+                          color: 0x1E90FF
+                          label_gap: 12
+                    - range_from: 0
+                      range_to: 720
+                      angle_range: 360
+                      rotation: 270
+                      indicators:
+                        - line:
+                            id: hour_hand
+                            width: 5
+                            color: 0xD2691E
+                            length: -30
+                            value: 0
+
+              - obj:  # oranžový střed ručiček
+                 width: 8
+                 height: 8
+                 align: CENTER
+                 radius: 4          # kulatý tvar
+                 bg_color: 0xFFA500
+                 border_width: 0
+
+              - label:
+                  id: day_label
+                  styles: date_style
+                  y: -30
+              - label:
+                  id: date_label
+                  styles: date_style
+                  y: 30
+
+        - obj:  # kontejner mediální panel
+            id: media_panel
+            width: 390
+            height: 140
+            align: BOTTOM_MID 
+            x: 0
+            y: -10      # posune panel nahoru od spodní hrany
+            pad_all: 5
+            bg_color: 0x000000    # černé pozadí panelu
+            border_width: 1
+            border_color: 0x9400D3
+            widgets:
+            # Horní řada tlačítek (ON/OFF, PLAY, STOP)
+              - button:
+                  id: btn_power
+                  width: 120
+                  height: 50
+                  x: 5
+                  y: 5
+                  bg_color: 0x000000
+                  bg_grad_color: 0xDC143C
+                  bg_grad_dir: VER 
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_color: 0xDEB887
+                        text_font: font_icons
+                        text: "\U000F0425"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: switch.toggle
+                          data:
+                            entity_id: switch.zvuk_obyvak
+
+              - button:
+                  id: btn_play
+                  width: 120
+                  height: 50
+                  x: 135
+                  y: 5
+                  bg_color: 0x000000
+                  bg_grad_color: 0x0000FF
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        id: icon_play
+                        align: CENTER
+                        text_color: 0xDEB887
+                        text_font: font_icons
+                        text: "\U000F040A"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: media_player.media_play_pause
+                          data:
+                            entity_id: media_player.voice_mass
+
+           
+
+             # Horni tlacitko album nahodne
+              - button:
+                  id: btn_disk
+                  width: 72
+                  height: 50
+                  x: 300
+                  y: 5
+                  bg_color: 0x000000
+                  bg_grad_color: 0x0000FF
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_color: 0xD2691E
+                        text_font: font_icons
+                        text: "\U000F0803"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: sendsdpin.call_method
+                          data:
+                            entity_id: media_player.voice_mass
+                            command: "randomplay"
+                            parameters: "tracks"
+
+               # Dolní řada tlačítek (VOL-, VOL+)
+              - button:
+                  id: btn_vol_down
+                  width: 120
+                  height: 50
+                  x: 5
+                  y: 72
+                  bg_color: 0x000000
+                  bg_grad_color: 0x0000FF
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_color: 0xFF0000
+                        text_font: font_icons
+                        text: "\U000F075E"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: media_player.volume_down
+                          data:
+                            entity_id: media_player.voice_mass
+
+                # Hlasitodt +
+              - button:
+                  id: btn_vol_up
+                  width: 120
+                  height: 50
+                  x: 135
+                  y: 72
+                  bg_color: 0x000000
+                  bg_grad_color: 0x0000FF
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_color: 0xADFF2F
+                        text_font: font_icons
+                        text: "\U000F075D"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: media_player.volume_up
+                          data:
+                            entity_id: media_player.voice_mass
+
+                # Spodni tlacitko artist nahodne
+              - button:
+                  id: btn_artist
+                  width: 72
+                  height: 50
+                  x: 300
+                  y: 72
+                  bg_color: 0x000000
+                  bg_grad_color: 0x0000FF
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x00FFFF
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_color: 0xD2691E
+                        text_font: font_icons
+                        text: "\U000F043B"
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: script.radio_elecrow
+
+              # Sloupec LED vpravo vedle tlačítek
+         
+
+        - label:  # běžící text nad panelem media
+            id: media_info_label
+            width: 310
+            text_font: font_cz_text
+            text_color: 0x7B68EE
+            text: "---"
+            long_mode: SCROLL_CIRCULAR
+            text_align: CENTER
+            align: BOTTOM_MID
+            x: 40
+            y: -166
+
+        - label:  # běžící text svatek
+            id: svatek_info_label
+            width: 310
+            text_font: font_cz_text
+            text_color: 0xFF6347
+            text: "---"
+            long_mode: SCROLL_CIRCULAR
+            text_align: CENTER
+            align: BOTTOM_MID
+            x: 40
+            y: -216
+
+        - label:  # ikona media textu 
+           id: media_icon
+           text: "\U000F0960"   # disk
+           text_font: font_icons_50
+           text_color: 0xFF00FF
+           align: BOTTOM_MID
+           x: -161
+           y: -152
+
+        - label:  # ikona svatek
+           id: svatek_icon
+           text: "\U000F09F0"   # kvetina
+           text_font: font_icons_50
+           text_color: 0xFFA500
+           align: BOTTOM_MID
+           x: -161
+           y: -206
+
+        - label:  # ikona stozar elektro
+           id: stozar_icon
+           text: "\U000F0D3E"   # stozar
+           text_font: font_icons_50
+           text_color: 0x228B22
+           align: BOTTOM_MID
+           x: -161
+           y: -290
+
+        - line:  # linka proti ikone stozar
+            points:
+              - 0, 0
+              - 100, 0
+            line_width: 1
+            line_color: 0xFF8C00
+            align: BOTTOM_MID
+            x: -68
+            y: -310 # jemně doladíš podle výšky ikony stozar
+
+        - button:  # ukazatel prikon byt
+            id: prikon_label
+            width: 165
+            height: 70
+            x: 65
+            y: -275
+            bg_color: 0x000000      # černé pozadí
+            border_width: 1
+            border_color: 0xFF8C00
+            align: BOTTOM_MID
+            clickable: false        # důležité – nebude reagovat na klik
+            widgets:
+              - label:
+                  id: hodnota_prikon_label
+                  text: "0"
+                  text_font: my_font40
+                  text_color: 0x4169E1
+                  align: CENTER
+
+        - line:  # linka pod textem media
+            points:
+              - 0, 0
+              - 310, 0
+            line_width: 1
+            line_color: 0xFF4500
+            align: BOTTOM_MID
+            x: 40
+            y: -164 # jemně doladíš podle výšky fontu
+
+        - obj:
+            id: roleta_panel # Kontejner pro roletu
+            width: 87
+            height: 210
+            align: BOTTOM_RIGHT
+            x: -8  # doladíš podle panelu
+            y: -10   # stejné jako media_panel
+            bg_color: 0x000000
+            border_width: 1
+            border_color: 0x9400D3
+            widgets:
+
+            - button:
+                width: 45
+                height: 50
+                align: TOP_MID
+                x: 0
+                y: 0   # zarovnáno k hornímu okraji roleta_panel
+                bg_color: 0x000000
+                bg_grad_color: 0xA0522D
+                bg_grad_dir: VER 
+                border_width: 1
+                border_color: 0xFF8C00
+                widgets:
+                  - label:
+                      text_font: font_icons
+                      text_color: 0xF4A460
+                      text: "\U000F125B"
+                      align: CENTER
+                on_click:
+                  then:
+                    - homeassistant.service:
+                        service: cover.open_cover
+                        data:
+                          entity_id: cover.roleta_kuchyne_zigbee
+
+            - button:
+                width: 45
+                height: 50
+                x: 0
+                y: 0    # uprostřed
+                align: CENTER
+                bg_color: 0x000000
+                bg_grad_color: 0xA0522D
+                bg_grad_dir: VER 
+                border_width: 1
+                border_color: 0xFF8C00
+                widgets:
+                  - label:
+                      text_font: font_icons
+                      text_color: 0xFF4500
+                      text: "\U000F0666"
+                      align: CENTER
+                on_click:
+                  then:
+                    - homeassistant.service:
+                        service: cover.stop_cover
+                        data:
+                          entity_id: cover.roleta_kuchyne_zigbee
+
+            - button:
+                width: 45
+                height: 50
+                align: BOTTOM_MID
+                x: 0
+                y: 0   # spodní část kontejneru
+                bg_color: 0x000000
+                bg_grad_color: 0xA0522D
+                bg_grad_dir: VER 
+                border_width: 1
+                border_color: 0xFF8C00
+                widgets:
+                  - label:
+                      text_font: font_icons
+                      text_color: 0xF4A460
+                      text: "\U000F1259"
+                      align: CENTER
+                on_click:
+                  then:
+                    - homeassistant.service:
+                        service: cover.close_cover
+                        data:
+                          entity_id: cover.roleta_kuchyne_zigbee
+
+        - obj:
+            id: roleta_procent # Kontejner procenta pro roletu
+            width: 87
+            height: 210
+            align: BOTTOM_RIGHT
+            x: -108 # doladíš podle panelu
+            y: -10   # stejné jako media_panel
+            bg_color: 0x000000
+            border_width: 1
+            border_color: 0x9400D3
+            widgets:
+
+            - button:
+                width: 45
+                height: 70
+                align: TOP_MID
+                x: 0
+                y: 0     # zarovnáno k hornímu okraji 
+                bg_color: 0x000000
+                bg_grad_color: 0xA0522D
+                bg_grad_dir: VER 
+                border_width: 1
+                border_color: 0xFF8C00
+                widgets:
+                  - label:
+                      text_font: font_icons
+                      text_color: 0xF4A460
+                      text: "\U000F1A6B"
+                      align: CENTER
+                on_click:
+                  then:
+                    - homeassistant.service:
+                        service: cover.set_cover_position
+                        data:
+                          entity_id: cover.roleta_kuchyne_zigbee
+                          position: "50"
+
+            - button:
+                width: 45
+                height: 70
+                align: BOTTOM_MID
+                x: 0
+                y: 0   # spodní část kontejneru
+                bg_color: 0x000000
+                bg_grad_color: 0xA0522D
+                bg_grad_dir: VER 
+                border_width: 1
+                border_color: 0xFF8C00
+                widgets:
+                  - label:
+                      text_font: font_icons
+                      text_color: 0xF4A460
+                      text: "\U000F1A6C"
+                      align: CENTER
+                on_click:
+                  then:
+                    - homeassistant.service:
+                        service: cover.set_cover_position
+                        data:
+                          entity_id: cover.roleta_kuchyne_zigbee
+                          position: "70"
+
+        - label:
+            id: roleta_info_label
+            text: "Roleta ---%"
+            align: BOTTOM_RIGHT
+            x: -50  # zarovnáno přibližně nad oba kontejnery (doladíš)
+            y: -230
+            text_font: my_font20
+            text_color: 0xF4A460
+
+        - label:
+            id: minutka_info_label
+            text: "MINUTKA"
+            width: 189
+            align: BOTTOM_MID
+            x: -301  # zarovnáno přibližně nad oba kontejnery (doladíš)
+            y: -279
+            text_font: my_font20
+            text_color: 0xF4A460
+            text_align: CENTER
+
+        - obj:  # kontejner svetla zasuvky
+            id: left_panel
+            width: 189
+            height: 265
+            align: BOTTOM_MID 
+            x: -301
+            y: -10      # posune panel nahoru od spodní hrany
+            bg_color: 0x000000    # černé pozadí panelu
+            border_width: 1
+            border_color: 0x9400D3
+            pad_all: 5
+            widgets:
+              - button:  # PLUS
+                  id: btn_timer_plus
+                  width: 50
+                  height: 50
+                  x: 2
+                  y: 3
+                  bg_color: 0x000000
+                  bg_grad_color: 0x006400
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x8B4513
+                  widgets:
+                    - label:
+                        text: "+"
+                        text_font: font_cz_text
+                        text_color: 0xF5DEB3
+                        align: CENTER
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: input_number.set_value
+                          data:
+                            entity_id: input_number.cas_elecrow
+                            value: !lambda |-
+                              int v = atoi(id(cas_elecrow_txt).state.c_str());
+                              v++;
+                              if (v > 120) v = 120;
+                              return v;
+
+              - button:  # ukazatel casu
+                  id: timer_label
+                  width: 61
+                  height: 50
+                  x: 59
+                  y: 3
+                  bg_color: 0x000000      # černé pozadí
+                  border_width: 1
+                  border_color: 0xFF8C00
+                  clickable: false        # důležité – nebude reagovat na klik
+                  widgets:
+                    - label:
+                        id: timer_label_inner
+                        text: "0"
+                        text_font: my_font20
+                        text_color: 0xF5DEB3
+                        align: CENTER
+
+              - button:  # MINUS
+                  id: btn_timer_minus
+                  width: 50
+                  height: 50
+                  x: 126
+                  y: 3
+                  bg_color: 0x000000
+                  bg_grad_color: 0x006400
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x8B4513
+                  widgets:
+                    - label:
+                        text: "-"
+                        text_font: font_cz_text
+                        text_color: 0xF5DEB3
+                        align: CENTER
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: input_number.set_value
+                          data:
+                            entity_id: input_number.cas_elecrow
+                            value: !lambda |-
+                              int v = atoi(id(cas_elecrow_txt).state.c_str());
+                              v--;
+                              if (v < 0) v = 0;
+                              return v;
+
+              - button:  # START
+                  id: btn_timer_start
+                  width: 174
+                  height: 50
+                  x: 2
+                  y: 112
+                  bg_color: 0x000000
+                  bg_grad_color: 0x006400
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x8B4513
+                  widgets:
+                    - label:
+                        text: "Start"
+                        text_font: font_cz_text
+                        text_color: 0xF5DEB3
+                        align: CENTER
+                  on_click:
+                    then:  
+                      - homeassistant.service:
+                          service: timer.start
+                          data:
+                            entity_id: timer.casovac_elecrow
+                            duration: !lambda |-
+                              int minuty = atoi(id(cas_elecrow_txt).state.c_str());
+                              return minuty * 60;
+
+              - button:  # odpocet
+                  id: timer_remaining_box
+                  width: 174
+                  height: 40
+                  x: 2
+                  y: 62
+                  bg_color: 0x000000 
+                  border_width: 1
+                  border_color: 0xFF8C00
+                  clickable: false        # nebude reagovat na klik
+                  widgets:
+                    - label:
+                        id: timer_remaining_inner
+                        text: "--:--"
+                        text_font: my_font20
+                        text_color: 0x00FF00
+                        align: CENTER
+
+              - button:  # zásuvka leva
+                  id: zas_l
+                  width: 80
+                  height: 70
+                  x: 2
+                  y: 180
+                  bg_color: 0x000000
+                  bg_grad_color: 0x8B4513
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x8B4513
+                  widgets:
+                    - label:
+                        id: zas_l_icon
+                        text: "\U000F1108"
+                        text_font: font_icons_50
+                        text_color: 0x696969
+                        align: CENTER
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: switch.toggle
+                          data:
+                            entity_id: switch.zasuvka_mycka
+
+              - button:  # zásuvka prava
+                  id: zas_p
+                  width: 80
+                  height: 70
+                  x: 96
+                  y: 180
+                  bg_color: 0x000000
+                  bg_grad_color: 0x8B4513
+                  bg_grad_dir: VER
+                  border_width: 1
+                  border_color: 0x8B4513
+                  widgets:
+                    - label:
+                        id: zas_p_icon
+                        text: "\U000F1108"
+                        text_font: font_icons_50
+                        text_color: 0x696969
+                        align: CENTER
+                  on_click:
+                    then:
+                      - homeassistant.service:
+                          service: switch.toggle
+                          data:
+                            entity_id: switch.zasuvka_pracka
+
+    - id: idle_page
+      on_swipe_right:
+        - lambda: 'lv_indev_wait_release(lv_indev_get_act());'
+        - lvgl.page.next:
+            animation: OUT_RIGHT
+            time: 300ms
+      on_swipe_left:
+        - lambda: 'lv_indev_wait_release(lv_indev_get_act());'
+        - lvgl.page.previous:
+            animation: OUT_LEFT
+            time: 300ms
+      bg_color: 0
+      widgets:
+        - obj:
+            align: CENTER
+            width: 800
+            height: 480
+            pad_all: 6
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            layout:
+              type: GRID
+              grid_columns:
+                - FR(50)
+                - FR(25)
+                - FR(25)
+              grid_rows:
+                - FR(1)
+                - FR(1)
+                - FR(1)
+            widgets:
+              - obj:
+                  id: time_section
+                  styles: section_panel_style      
+                  height: 100%
+                  width: 100%       
+                  bg_color: 0x4761d0
+                  grid_cell_column_pos: 0 
+                  grid_cell_row_pos: 0 
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH                      
+                  widgets:   
+                    - label:
+                        id: date_value_label
+                        styles: title_label_style                        
+                        align: TOP_MID                        
+                        text: "dd.mm.yyyy"                 
+                    - label:
+                        id: clock_label
+                        styles: clock_label_style
+                        align: CENTER  
+                        y: 15 
+                        text: "00:00"
+
+              - obj:
+                  id: temp_section_
+                  styles: section_panel_style
+                  height: 100%
+                  width: 100%
+                  bg_color: 0x61d047
+                  scrollbar_mode: "OFF"
+                  grid_cell_column_pos: 1
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - meter:
+                        height: 100%
+                        width: 100%
+                        border_width: 0
+                        outline_width: 0
+                        align: center
+                        bg_color: 0x40a129
+                        scales:
+                          angle_range: 180
+                          range_to: 40
+                          range_from: -20
+                          ticks:
+                            count: 1000
+                          indicators:
+                            - line:
+                                id: val_needle
+                                width: 8
+                                color: 16777215
+                                r_mod: 12
+                                value: 50
+                            - arc:
+                                r_mod: 10
+                                width: 20
+                                start_value: -20
+                                end_value: 40
+                            - tick_style:
+                                color_start: 3381759
+                                color_end: 13371909
+                    - label:
+                        styles: detail_style
+                        y: 31
+                        x: -70
+                        text: "-20"
+                        text_color: 0x4761d0
+                       
+                    - label:
+                        styles: detail_style
+                        y: 31
+                        x: 70
+                        text: "40"
+                        text_color: 16711680
+                    - label:
+                        styles: title_style
+                        id: label_temp
+                        y: -5
+             
+              - obj:
+                  id: button_section
+                  styles: section_panel_style
+                  height: 100%
+                  width: 100%
+                  bg_color: 0x47d0b6
+                  grid_cell_column_pos: 0
+                  grid_cell_row_pos: 1
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - button:
+                        id: unlock_button
+                        align: left_mid
+                        width: 100
+                        
+                        height: 100
+                        radius: 50
+                        bg_color: 16711680
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "Odemknout"
+                              text_color: 65280
+                        on_click:
+                          - homeassistant.action:
+                              action: lock.unlock
+                              data:
+                                entity_id: lock.zamek_vrata
+                    - button:
+                        id: lock_button
+                        align: right_mid
+                       
+                        width: 100
+                        height: 100
+                        radius: 50
+                        bg_color: 65280
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "Zamknout"
+                              text_color: 16711680
+                        on_click:
+                          - homeassistant.action:
+                              action: lock.lock
+                              data:
+                                entity_id: lock.zamek_vrata
+                    - label:
+                        id: lock_label
+                        width: 100
+                        height: 50
+                        align: TOP_MID 
+                        radius: 50
+                        bg_color: 16777215
+                        text: !lambda |-
+                          return id(text_stav).state;
+                        text_color: 0xa12940
+              - obj:
+                  id: antiburn_section
+                  styles: section_panel_style
+                  align: CENTER
+                  height: 100%
+                  width: 100%
+                  bg_color: 0xd0b647
+                  grid_cell_column_pos: 2
+                  grid_cell_row_pos: 0
+                  grid_cell_x_align: STRETCH
+                  grid_cell_y_align: STRETCH
+                  widgets:
+                    - button:
+                        id: antiburn_switch
+                        width: 100
+                        height: 50
+                        align: CENTER
+                        checkable: true
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: Antiburn
+                              text_color: 0xd0b647
+                        on_click:
+                          - if:
+                              condition:
+                                lvgl.is_paused: null
+                              then:
+                                - lvgl.resume: null
+                                - lvgl.widget.update:
+                                    id: antiburn_switch
+                                    state:
+                                      checked: false
+                              else:
+                                - lvgl.pause:
+                                    show_snow: true
+                                - lvgl.widget.update:
+                                    id: antiburn_switch
+                                    state:
+                                      checked: true
+                                - delay: 3min
+                                - lvgl.resume: null
+                                - lvgl.widget.update:
+                                    id: antiburn_switch
+                                    state:
+                                      checked: false
+
+             
+    
+
+color:
+  - id: my_red
+    red: 100%
+    green: 0%
+    blue: 0%
+  - id: my_pink
+    red: 100%
+    green: 10%
+    blue: 40%
+  - id: my_yellow
+    red: 100%
+    green: 100%
+    blue: 0%
+  - id: my_green
+    red: 0%
+    green: 100%
+    blue: 0%
+  - id: my_blue
+    red: 0%
+    green: 0%
+    blue: 100%
+  - id: my_gray
+    red: 50%
+    green: 50%
+    blue: 50%
+  - id: my_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: my_black
+    red: 0%
+    green: 0%
+    blue: 0%
+
+  
+light:
+  - platform: monochromatic
+    id: id_light_backlight_brightness
+    output: id_output_backlight_brightness
+    name: "Backlight Brightness"
+    restore_mode: ALWAYS_ON
+ 
+
+switch:
+  - platform: safe_mode
+    name: Use Safe Mode
+    id: device_safe_mode
+    
+  - platform: gpio
+    id: lcdbacklight
+    name: lcdbacklight
+    pin:
+      ch422g: io_ex
+      number: 2
+      mode:
+        output: true
+      inverted: false
+    restore_mode: ALWAYS_ON
+
+  - platform: template
+    name: Antiburn
+    id: switch_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Starting Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw
+output:
+  - platform: ledc
+    pin: GPIO16
+    id: id_output_backlight_brightness
+    min_power: 0.08
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(timer_seconds) > 0) {
+            id(timer_seconds)--;
+
+            int min = id(timer_seconds) / 60;
+            int sec = id(timer_seconds) % 60;
+
+            char buf[10];
+            sprintf(buf, "%02d:%02d", min, sec);
+
+            lv_label_set_text(id(timer_remaining_inner), buf);
+          }
