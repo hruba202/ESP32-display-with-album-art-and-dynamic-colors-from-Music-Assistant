@@ -1,5 +1,4 @@
-https://youtu.be/h0uh9-jHTC0
-
+[![Watch the demo video](https://img.youtube.com/vi/h0uh9-jHTC0/0.jpg)](https://youtu.be/h0uh9-jHTC0)
 What you need
 
 ESP32-S3 with display and LVGL in ESPHome
