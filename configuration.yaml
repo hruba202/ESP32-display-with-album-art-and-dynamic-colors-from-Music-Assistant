@@ -1,0 +1,11 @@
+shell_command:
+  get_album_color: >-
+    python3 /config/album_color.py "{{ url }}"
+
+input_text:
+  album_color_r:
+    initial: "0"
+  album_color_g:
+    initial: "0"
+  album_color_b:
+    initial: "0"
